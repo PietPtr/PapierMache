@@ -22,6 +22,7 @@ pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
 pub struct App {
     pub running: bool,
     last_sim_step: SimStepState,
+    free_running: bool,
     vm: PaperVM<CharCell>,
     view_pos: Pos,
 }
@@ -37,6 +38,7 @@ impl App {
                 StepResult::Finished => todo!(),
                 StepResult::Running(s) => s,
             },
+            free_running: false,
             vm,
             view_pos: Pos(0, 0),
         }
@@ -48,7 +50,9 @@ impl App {
 
     /// Handles the tick event of the terminal.
     pub fn tick(&mut self) {
-        // self.page_title = format!("{:?}", self.page_content_length);
+        if self.free_running {
+            self.advance_sim();
+        }
     }
 
     /// Set running to false to quit the application.
@@ -58,8 +62,11 @@ impl App {
 
     pub fn advance_sim(&mut self) {
         match self.vm.step() {
-            StepResult::Finished => (),
+            StepResult::Finished => panic!("what do on finish"),
             StepResult::Running(step_state) => self.last_sim_step = step_state,
+        }
+        if let Instruction::BreakPoint = self.last_sim_step.instruction {
+            self.free_running = false;
         }
     }
 
@@ -116,7 +123,19 @@ impl App {
             Instruction::Mod(w1, w2) => vec![w1, w2],
             Instruction::Copy(word) => vec![word],
             Instruction::TrimmedCopy(word) => vec![word],
-            _ => vec![],
+            Instruction::Write(_) => vec![],
+            Instruction::Call(_, _) => vec![],
+            Instruction::Jump(_) => vec![],
+            Instruction::JumpRelIf(word, _, _, _) => vec![word],
+            Instruction::JumpRelIfStr(word, _, _) => vec![word],
+            Instruction::MoveCursor(_) => vec![],
+            Instruction::Stop => vec![],
+            Instruction::BreakPoint => vec![],
+            Instruction::JumpRelCmp(a, b, _, _) => vec![a, b],
         }
+    }
+
+    pub(crate) fn toggle_free_running(&mut self) {
+        self.free_running = !self.free_running
     }
 }

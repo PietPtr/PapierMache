@@ -80,6 +80,63 @@ pub fn gcd_with_mod() -> Vec<Instruction> {
         copy((CPFI, -1, CPF)),
         // jump to start
         jump(-5),
+        breakpoint(),
         circle((CPFI, -1, CPF)),
+    ]
+}
+
+pub fn pascals_triangle() -> Vec<Instruction> {
+    let spacing = 1;
+    vec![
+        write(1.),
+        move_cursor(-CPFI - CPFI, spacing),
+        write(1.),
+        move_cursor(CPFI, 0),
+        write(1.),
+        move_cursor(-CPFI * 2 - 1, 0),
+        jump_rel_if_str((0, 0, 1usize), " ", 3),
+        move_cursor(1, 0),
+        jump(-3),
+        move_cursor(1, 1),
+        write(1.),
+        move_cursor(CPFI, 0),
+        add((-CPFI, -1, CPF), (CPFI, -1, CPF)),
+        jump_rel_if_str((CPFI - 1, -1, 1usize), " ", -8),
+        jump(-3),
+        breakpoint(),
+    ]
+}
+
+pub fn fibonacci() -> Vec<Instruction> {
+    vec![
+        write(1.),
+        move_cursor(-CPFI, 1),
+        write(1.),
+        move_cursor(-CPFI, 1),
+        add((0, -1, CPF), (0, -2, CPF)),
+        move_cursor(-CPFI, 1),
+        jump(-2),
+        breakpoint(),
+    ]
+}
+
+pub fn sort() -> Vec<Instruction> {
+    vec![
+        write("\n"),
+        jump(2),
+        move_cursor(-CPFI, 0),
+        jump_rel_cmp((0, -1, CPF), (CPFI, -1, CPF), Ordering::Greater, 7),
+        copy((0, -1, CPF)),
+        copy((0, -1, CPF)),
+        jump_rel_if_str((CPFI, -1, 1usize), " ", 2),
+        jump(-4),
+        copy((0, -1, CPF)),
+        jump(-9),
+        copy((CPFI, -1, CPF)),
+        copy((-CPFI, -1, CPF)),
+        jump_rel_if_str((CPFI, -1, 1usize), " ", 2),
+        jump(-10),
+        copy((0, -1, CPF)),
+        jump(-15),
     ]
 }

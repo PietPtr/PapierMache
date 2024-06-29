@@ -1,3 +1,4 @@
+use rand::seq::SliceRandom;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -28,6 +29,22 @@ impl MemoryCell for CharCell {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct OverwritableCell {
+    values: Vec<char>,
+}
+
+impl MemoryCell for OverwritableCell {
+    fn write(&mut self, value: char) {
+        self.values.push(value);
+    }
+
+    fn read(&self) -> char {
+        let mut rng = rand::thread_rng();
+        self.values.choose(&mut rng).copied().unwrap_or(' ')
+    }
+}
+
 pub trait MemoryCell: Default + Debug + Clone {
     fn write(&mut self, value: char);
     fn read(&self) -> char;
@@ -45,7 +62,13 @@ impl FromChars for i64 {
 
 impl FromChars for f64 {
     fn from_chars(chars: Vec<char>) -> f64 {
-        chars.iter().collect::<String>().trim().parse().unwrap()
+        chars
+            .iter()
+            .collect::<String>()
+            .replace('_', " ")
+            .trim()
+            .parse()
+            .unwrap_or(0.)
     }
 }
 
@@ -81,6 +104,10 @@ impl IntoChars for f64 {
     fn chars_ref(&self) -> Vec<char> {
         format!("{:width$}", self, width = CHARS_PER_FLOAT)
             .chars()
+            .map(|c| match c {
+                ' ' => '_',
+                _ => c,
+            })
             .collect()
     }
 }
@@ -120,8 +147,13 @@ pub enum Instruction {
     Copy(Word),
     TrimmedCopy(Word),
     Jump(i64),
+    JumpRelCmp(Word, Word, Ordering, i64),
     JumpRelIf(Word, Ordering, f64, i64),
-    STOP,
+    JumpRelIfStr(Word, String, i64),
+    /// Moves the cursor relatively by the given position
+    MoveCursor(Pos),
+    Stop,
+    BreakPoint,
 }
 
 impl std::fmt::Display for Instruction {
@@ -151,7 +183,15 @@ impl std::fmt::Display for Instruction {
             Instruction::JumpRelIf(w, ord, compare_value, jump) => {
                 write!(f, "JumpRelIf {} {:?} {} {}", w, ord, compare_value, jump)
             }
-            Instruction::STOP => write!(f, "STOP"),
+            Instruction::JumpRelCmp(w1, w2, ord, jump) => {
+                write!(f, "JumpRelCmp {} {} {:?} {}", w1, w2, ord, jump)
+            }
+            Instruction::Stop => write!(f, "Stop"),
+            Instruction::BreakPoint => write!(f, "Breakpoint"),
+            Instruction::MoveCursor(pos) => write!(f, "Move Cursor {:?}", pos),
+            Instruction::JumpRelIfStr(word, string, jump) => {
+                write!(f, "JumpRelIfStr {word} {string} {jump}")
+            }
         }
     }
 }
@@ -355,7 +395,31 @@ impl<T: MemoryCell> PaperVM<T> {
                     return StepResult::Running(sim_step_state);
                 }
             }
-            Instruction::STOP => panic!("STOP"),
+            Instruction::JumpRelCmp(w1, w2, ordering, rel_jump) => {
+                let a: f64 = self.read(w1);
+                let b: f64 = self.read(w2);
+                let cmp = a.partial_cmp(&b);
+                if cmp == Some(ordering)
+                        // special case for floating point equality
+                        || (ordering == Ordering::Equal && (a - b).abs() < f32::EPSILON as f64)
+                {
+                    self.instruction_counter += rel_jump;
+                    return StepResult::Running(sim_step_state);
+                }
+            }
+            Instruction::Stop => panic!("STOP"),
+            // For visual sims only
+            Instruction::BreakPoint => {}
+            Instruction::MoveCursor(pos) => {
+                self.cursor = Pos(self.cursor.0 + pos.0, self.cursor.1 + pos.1)
+            }
+            Instruction::JumpRelIfStr(word, string, jump) => {
+                let a: Vec<char> = self.read(word);
+                if a.into_iter().collect::<String>() == string {
+                    self.instruction_counter += jump;
+                    return StepResult::Running(sim_step_state);
+                }
+            }
         }
         self.instruction_counter += 1;
 
@@ -451,6 +515,15 @@ pub mod instructions {
         Instruction::JumpRelIf(word.into(), ordering, val, rel_jump)
     }
 
+    pub fn jump_rel_cmp(
+        a: impl Into<Word>,
+        b: impl Into<Word>,
+        ordering: Ordering,
+        rel_jump: i64,
+    ) -> Instruction {
+        Instruction::JumpRelCmp(a.into(), b.into(), ordering, rel_jump)
+    }
+
     pub fn add(a: impl Into<Word>, b: impl Into<Word>) -> Instruction {
         Instruction::Add(a.into(), b.into())
     }
@@ -464,6 +537,18 @@ pub mod instructions {
     }
 
     pub fn stop() -> Instruction {
-        Instruction::STOP
+        Instruction::Stop
+    }
+
+    pub fn breakpoint() -> Instruction {
+        Instruction::BreakPoint
+    }
+
+    pub fn move_cursor(x: i64, y: i64) -> Instruction {
+        Instruction::MoveCursor(Pos(x, y))
+    }
+
+    pub fn jump_rel_if_str(a: impl Into<Word>, string: &str, jump: i64) -> Instruction {
+        Instruction::JumpRelIfStr(a.into(), string.to_string(), jump)
     }
 }

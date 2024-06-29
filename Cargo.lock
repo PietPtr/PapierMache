@@ -297,6 +297,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "daan_compile"
+version = "0.1.0"
+dependencies = [
+ "papier",
+ "render_staal",
+]
+
+[[package]]
 name = "derive_more"
 version = "0.99.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -936,6 +944,7 @@ name = "papier"
 version = "0.1.0"
 dependencies = [
  "approx",
+ "rand",
 ]
 
 [[package]]

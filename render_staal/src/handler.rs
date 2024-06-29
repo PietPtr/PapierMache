@@ -23,9 +23,11 @@ pub async fn handle_key_events(key_event: KeyEvent, app: &mut App) -> AppResult<
         | KeyCode::End => {
             app.scroll(key_event.code);
         }
-        // TODO: advance simulation
         KeyCode::Char('n') => {
             app.advance_sim();
+        }
+        KeyCode::Char(' ') => {
+            app.toggle_free_running();
         }
         _ => {}
     }

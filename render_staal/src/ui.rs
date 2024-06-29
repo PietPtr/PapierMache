@@ -2,7 +2,7 @@ use papier::papervm::Pos;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
-    widgets::{Paragraph, Scrollbar, ScrollbarOrientation, Wrap},
+    widgets::Paragraph,
     Frame,
 };
 
@@ -32,7 +32,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
 
     let view: String = app.get_view_as_string(frame.size());
-    let p = Paragraph::new(view).style(Style::default().fg(Color::Black));
+    let p = Paragraph::new(view).style(Style::default());
 
     frame.render_widget(
         p,
