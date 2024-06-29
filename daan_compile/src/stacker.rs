@@ -141,16 +141,17 @@ pub fn sort() -> Vec<Vec<StackInstr>> {
                 Pos { x: 0, y: -1 },
                 Pos { x: 1, y: -1 },
                 Ordering::Greater,
-                4,
+                3,
             ),
             StackInstr::Copy(Pos { x: 0, y: -1 }),
-            StackInstr::Jump(5),
+            StackInstr::Jump(-3),
             StackInstr::Copy(Pos { x: 1, y: -1 }),
             StackInstr::Copy(Pos { x: -1, y: -1 }),
-            StackInstr::Jump(2),
-            StackInstr::Write(()),
+            StackInstr::Jump(-6),
             StackInstr::Break,
+            // Check if we need to copy last value
+            StackInstr::Copy(Pos { x: 0, y: -1 }),
         ],
-        vec![StackInstr::Jump(-10)],
+        vec![StackInstr::Jump(-9)],
     ]
 }
