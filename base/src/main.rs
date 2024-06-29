@@ -1,16 +1,18 @@
 use papier::{
     convenience::call_static,
-    papervm::{CharCell, PaperVM, CHARS_PER_FLOAT},
+    papervm::{instructions::circle, CharCell, PaperVM, StepResult, CHARS_PER_FLOAT},
     programs::*,
 };
 
 fn main() {
     let mut vm = PaperVM::<CharCell>::new(call_static(
-        gcd_with_mod(),
+        vec![circle((0, 0, CHARS_PER_FLOAT))],
         vec![98765432., 1234567.],
         CHARS_PER_FLOAT,
     ));
-    vm.run();
+    while vm.step().is_finished() {
+        println!("{}", vm.print());
+    }
     println!("{}", vm.print());
     dbg!(vm.result::<f64>().unwrap());
 

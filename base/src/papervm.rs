@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::fmt::{self, Display};
 use std::sync::Arc;
 
 pub const CHARS_PER_FLOAT: usize = 10;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CharCell {
     value: char,
 }
@@ -26,7 +27,7 @@ impl MemoryCell for CharCell {
     }
 }
 
-pub trait MemoryCell: Default + Debug {
+pub trait MemoryCell: Default + Debug + Clone {
     fn write(&mut self, value: char);
     fn read(&self) -> char;
 }
@@ -122,6 +123,38 @@ pub enum Instruction {
     STOP,
 }
 
+impl std::fmt::Display for Instruction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Instruction::Write(chars) => {
+                write!(
+                    f,
+                    "Write `{}'",
+                    chars
+                        .chars_ref()
+                        .into_iter()
+                        .filter(|c| *c != '\n')
+                        .collect::<String>()
+                )
+            }
+            Instruction::Call(instructions, args) => {
+                write!(f, "Call prog[{}]({:?})", instructions.len(), args)
+            }
+            Instruction::Circle(w) => write!(f, "Circle {}", w),
+            Instruction::Add(w1, w2) => write!(f, "Add {} {}", w1, w2),
+            Instruction::Sub(w1, w2) => write!(f, "Sub {} {}", w1, w2),
+            Instruction::Mod(w1, w2) => write!(f, "Mod {} {}", w1, w2),
+            Instruction::Copy(w) => write!(f, "Copy {}", w),
+            Instruction::TrimmedCopy(w) => write!(f, "TrimmedCopy {}", w),
+            Instruction::Jump(val) => write!(f, "Jump {}", val),
+            Instruction::JumpRelIf(w, ord, compare_value, jump) => {
+                write!(f, "JumpRelIf {} {:?} {} {}", w, ord, compare_value, jump)
+            }
+            Instruction::STOP => write!(f, "STOP"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pos(pub i64, pub i64);
 
@@ -142,6 +175,12 @@ impl Pos {
 #[derive(Debug, Clone, Copy)]
 pub struct Word(pub Pos, pub usize);
 
+impl Display for Word {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({}, {}, {})", self.0 .0, self.0 .1, self.1)
+    }
+}
+
 impl<A, B, C> From<(A, B, C)> for Word
 where
     A: Into<i64>,
@@ -153,11 +192,27 @@ where
     }
 }
 
+#[derive(Debug)]
+pub enum StepResult {
+    Finished,
+    Running(Instruction),
+}
+
+impl StepResult {
+    pub fn is_finished(&self) -> bool {
+        matches!(self, StepResult::Finished)
+    }
+}
+
+#[derive(Clone)]
 pub struct PaperVM<T: MemoryCell> {
     memory: HashMap<Pos, T>,
     cursor: Pos,
     program: Vec<Instruction>,
     circled: Option<Word>,
+    instruction_counter: i64,
+    subroutine: Option<Box<PaperVM<T>>>,
+    pub finished_papers: Vec<PaperVM<T>>,
 }
 
 impl<T: MemoryCell> PaperVM<T> {
@@ -167,7 +222,26 @@ impl<T: MemoryCell> PaperVM<T> {
             cursor: Pos(0, 0),
             program,
             circled: None,
+            instruction_counter: 0,
+            subroutine: None,
+            finished_papers: vec![],
         }
+    }
+
+    pub fn get_memory(&self) -> &HashMap<Pos, T> {
+        &self.memory
+    }
+
+    pub fn get_circled(&self) -> Option<Word> {
+        self.circled.map(|mut x| {
+            x.0 .0 += self.cursor.0;
+            x.0 .1 += self.cursor.1;
+            x
+        })
+    }
+
+    pub fn cursor(&self) -> Pos {
+        self.cursor
     }
 
     fn op(&mut self, a: Word, b: Word, op: fn(f64, f64) -> f64) {
@@ -208,56 +282,71 @@ impl<T: MemoryCell> PaperVM<T> {
         result
     }
 
-    pub fn run(&mut self) {
-        let mut instruction_counter: i64 = 0;
+    pub fn step(&mut self) -> StepResult {
+        if let Some(result) = self.subroutine.as_mut().map(|x| x.step()) {
+            if result.is_finished() {
+                let word = self.subroutine.as_ref().unwrap().circled.unwrap();
+                self.write(&self.subroutine.as_ref().unwrap().read::<Vec<char>>(word));
+                self.finished_papers.push(*self.subroutine.take().unwrap());
+            } else {
+                return result;
+            }
+        }
 
-        loop {
-            // println!("---\n{}---\n", self.print());
-            let instruction = self.program[instruction_counter as usize].clone();
-            // println!("Instruction: {:?}, cursor: {:?}", instruction, self.cursor);
-            match instruction {
-                Instruction::Write(chars) => self.write(&chars),
-                Instruction::Call(instructions, args) => {
-                    let mut vm: PaperVM<T> = PaperVM::new(instructions);
-                    for arg in args {
-                        vm.write(&self.read::<Vec<char>>(arg));
-                    }
-                    vm.run();
-                    let word = vm.circled.unwrap();
-                    self.write(&vm.read::<Vec<char>>(word));
-                }
-                Instruction::Circle(arg) => {
-                    self.circled = Some(arg);
-                    break;
-                }
-                Instruction::Add(a, b) => self.op(a, b, |a, b| a + b),
-                Instruction::Sub(a, b) => self.op(a, b, |a, b| a - b),
-                Instruction::Mod(a, b) => self.op(a, b, |a, b| a % b),
+        let instruction = self.program[self.instruction_counter as usize].clone();
 
-                Instruction::Copy(a) => self.write(&self.read::<Vec<char>>(a)),
-                Instruction::TrimmedCopy(a) => {
-                    let mut a: Vec<char> = self.read(a);
-                    a.retain(|x| !x.is_whitespace());
-                    self.write(&a);
+        match instruction.clone() {
+            Instruction::Write(chars) => self.write(&chars),
+            Instruction::Call(instructions, args) => {
+                let mut vm: PaperVM<T> = PaperVM::new(instructions);
+                for arg in args {
+                    vm.write(&self.read::<Vec<char>>(arg));
                 }
-                Instruction::Jump(rel_jump) => {
-                    instruction_counter += rel_jump;
-                    continue;
-                }
-                Instruction::JumpRelIf(a, ordering, val, rel_jump) => {
-                    let a: f64 = self.read(a);
-                    let cmp = a.partial_cmp(&val);
-                    if cmp == Some(ordering)
+                self.subroutine = Some(Box::new(vm));
+                self.instruction_counter += 1;
+                return StepResult::Running(instruction.clone());
+            }
+            Instruction::Circle(arg) => {
+                self.circled = Some(arg);
+                return StepResult::Finished;
+            }
+            Instruction::Add(a, b) => self.op(a, b, |a, b| a + b),
+            Instruction::Sub(a, b) => self.op(a, b, |a, b| a - b),
+            Instruction::Mod(a, b) => self.op(a, b, |a, b| a % b),
+
+            Instruction::Copy(a) => self.write(&self.read::<Vec<char>>(a)),
+            Instruction::TrimmedCopy(a) => {
+                let mut a: Vec<char> = self.read(a);
+                a.retain(|x| !x.is_whitespace());
+                self.write(&a);
+            }
+            Instruction::Jump(rel_jump) => {
+                self.instruction_counter += rel_jump;
+                return StepResult::Running(instruction.clone());
+            }
+            Instruction::JumpRelIf(a, ordering, val, rel_jump) => {
+                let a: f64 = self.read(a);
+                let cmp = a.partial_cmp(&val);
+                if cmp == Some(ordering)
                         // special case for floating point equality
                         || (ordering == Ordering::Equal && (a - val).abs() < f32::EPSILON as f64)
-                    {
-                        instruction_counter += rel_jump;
-                        continue;
-                    }
+                {
+                    self.instruction_counter += rel_jump;
+                    return StepResult::Running(instruction.clone());
                 }
-                Instruction::STOP => panic!("STOP"),
             }
-            instruction_counter += 1;
+            Instruction::STOP => panic!("STOP"),
+        }
+        self.instruction_counter += 1;
+
+        StepResult::Running(instruction.clone())
+    }
+
+    pub fn run(&mut self) {
+        loop {
+            if self.step().is_finished() {
+                break;
+            }
         }
 
         println!("---\n{}---\n", self.print());
