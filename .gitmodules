@@ -1,0 +1,3 @@
+[submodule "render_daan/handwriting"]
+	path = render_daan/handwriting
+	url = https://github.com/sjvasquez/handwriting-synthesis

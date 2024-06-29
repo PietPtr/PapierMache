@@ -1,5 +1,7 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 pub const CHARS_PER_FLOAT: usize = 10;
 
@@ -29,7 +31,7 @@ pub trait MemoryCell: Default + Debug {
     fn read(&self) -> char;
 }
 
-pub trait FromChars {
+pub trait FromChars: Debug + Send + Sync {
     fn from_chars(chars: Vec<char>) -> Self;
 }
 
@@ -51,11 +53,17 @@ impl FromChars for Vec<char> {
     }
 }
 
-pub trait IntoChars: Debug {
+pub trait IntoChars: Debug + Send + Sync {
     fn chars_ref(&self) -> Vec<char>;
 }
 
-impl IntoChars for Box<dyn IntoChars> {
+impl IntoChars for &dyn IntoChars {
+    fn chars_ref(&self) -> Vec<char> {
+        (*self).chars_ref()
+    }
+}
+
+impl IntoChars for Arc<dyn IntoChars> {
     fn chars_ref(&self) -> Vec<char> {
         self.as_ref().chars_ref()
     }
@@ -81,22 +89,37 @@ impl IntoChars for &str {
     }
 }
 
+impl IntoChars for str {
+    fn chars_ref(&self) -> Vec<char> {
+        self.chars().collect()
+    }
+}
+
+impl IntoChars for String {
+    fn chars_ref(&self) -> Vec<char> {
+        self.chars().collect()
+    }
+}
+
 impl IntoChars for Vec<char> {
     fn chars_ref(&self) -> Vec<char> {
         self.clone()
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
-    Write(Box<dyn IntoChars>),
+    Write(Arc<dyn IntoChars>),
     Call(Vec<Instruction>, Vec<Word>),
     Circle(Word),
     Add(Word, Word),
+    Sub(Word, Word),
     Mod(Word, Word),
     Copy(Word),
+    TrimmedCopy(Word),
     Jump(i64),
-    JumpRelIf(Word, f64, i64),
+    JumpRelIf(Word, Ordering, f64, i64),
+    STOP,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -119,15 +142,26 @@ impl Pos {
 #[derive(Debug, Clone, Copy)]
 pub struct Word(pub Pos, pub usize);
 
-pub struct PaperVM<'a, T: MemoryCell> {
+impl<A, B, C> From<(A, B, C)> for Word
+where
+    A: Into<i64>,
+    B: Into<i64>,
+    C: Into<usize>,
+{
+    fn from((a, b, c): (A, B, C)) -> Self {
+        Word(Pos(a.into(), b.into()), c.into())
+    }
+}
+
+pub struct PaperVM<T: MemoryCell> {
     memory: HashMap<Pos, T>,
     cursor: Pos,
-    program: &'a Vec<Instruction>,
+    program: Vec<Instruction>,
     circled: Option<Word>,
 }
 
-impl<'a, T: MemoryCell> PaperVM<'a, T> {
-    pub fn new(program: &'a Vec<Instruction>) -> PaperVM<T> {
+impl<T: MemoryCell> PaperVM<T> {
+    pub fn new(program: Vec<Instruction>) -> PaperVM<T> {
         PaperVM {
             memory: HashMap::new(),
             cursor: Pos(0, 0),
@@ -178,43 +212,55 @@ impl<'a, T: MemoryCell> PaperVM<'a, T> {
         let mut instruction_counter: i64 = 0;
 
         loop {
-            println!("---\n{}---\n", self.print());
-            let instruction = &self.program[instruction_counter as usize];
-            println!("Instruction: {:?}, cursor: {:?}", instruction, self.cursor);
+            // println!("---\n{}---\n", self.print());
+            let instruction = self.program[instruction_counter as usize].clone();
+            // println!("Instruction: {:?}, cursor: {:?}", instruction, self.cursor);
             match instruction {
-                Instruction::Write(chars) => self.write(chars),
+                Instruction::Write(chars) => self.write(&chars),
                 Instruction::Call(instructions, args) => {
                     let mut vm: PaperVM<T> = PaperVM::new(instructions);
                     for arg in args {
-                        vm.write(&self.read::<Vec<char>>(*arg));
+                        vm.write(&self.read::<Vec<char>>(arg));
                     }
                     vm.run();
                     let word = vm.circled.unwrap();
                     self.write(&vm.read::<Vec<char>>(word));
                 }
                 Instruction::Circle(arg) => {
-                    self.circled = Some(*arg);
+                    self.circled = Some(arg);
                     break;
                 }
-                Instruction::Add(a, b) => self.op(*a, *b, |a, b| a + b),
-                Instruction::Mod(a, b) => self.op(*a, *b, |a, b| {
-                    dbg!(a, b, a % b);
-                    a % b
-                }),
-                Instruction::Copy(a) => self.write(&self.read::<Vec<char>>(*a)),
+                Instruction::Add(a, b) => self.op(a, b, |a, b| a + b),
+                Instruction::Sub(a, b) => self.op(a, b, |a, b| a - b),
+                Instruction::Mod(a, b) => self.op(a, b, |a, b| a % b),
+
+                Instruction::Copy(a) => self.write(&self.read::<Vec<char>>(a)),
+                Instruction::TrimmedCopy(a) => {
+                    let mut a: Vec<char> = self.read(a);
+                    a.retain(|x| !x.is_whitespace());
+                    self.write(&a);
+                }
                 Instruction::Jump(rel_jump) => {
                     instruction_counter += rel_jump;
                     continue;
                 }
-                Instruction::JumpRelIf(a, val, rel_jump) => {
-                    if (self.read::<f64>(*a) - val) < (std::f32::EPSILON as f64) {
+                Instruction::JumpRelIf(a, ordering, val, rel_jump) => {
+                    let a: f64 = self.read(a);
+                    let cmp = a.partial_cmp(&val);
+                    if cmp == Some(ordering)
+                        // special case for floating point equality
+                        || (ordering == Ordering::Equal && (a - val).abs() < f32::EPSILON as f64)
+                    {
                         instruction_counter += rel_jump;
                         continue;
                     }
                 }
+                Instruction::STOP => panic!("STOP"),
             }
             instruction_counter += 1;
         }
+
+        println!("---\n{}---\n", self.print());
     }
 
     pub fn read<O: FromChars>(&self, word: Word) -> O {
@@ -222,9 +268,13 @@ impl<'a, T: MemoryCell> PaperVM<'a, T> {
         let length = word.1;
         let mut pos = word.0;
         for _ in 0..length {
-            let cell = self.memory.get(&pos.rel_to_cursor(self.cursor)).unwrap();
+            let cell = self
+                .memory
+                .get(&pos.rel_to_cursor(self.cursor))
+                .map(|x| x.read())
+                .unwrap_or(' ');
             pos = pos.next();
-            chars.push(cell.read());
+            chars.push(cell);
         }
         O::from_chars(chars)
     }
@@ -234,6 +284,10 @@ impl<'a, T: MemoryCell> PaperVM<'a, T> {
         for c in chars.iter() {
             if *c == '\n' {
                 self.cursor = self.cursor.down();
+                continue;
+            }
+            if *c == ' ' {
+                self.cursor = self.cursor.next();
                 continue;
             }
             let cell = self.memory.entry(self.cursor).or_default();
@@ -246,5 +300,61 @@ impl<'a, T: MemoryCell> PaperVM<'a, T> {
     pub fn result<O: FromChars>(&mut self) -> Option<O> {
         self.circled
             .map(|word| O::from_chars(self.read::<Vec<char>>(word)))
+    }
+}
+
+pub mod instructions {
+    use super::*;
+
+    pub fn write(chars: impl IntoChars) -> Instruction {
+        Instruction::Write(Arc::new(chars.chars_ref()))
+    }
+
+    pub fn call<A>(instructions: Vec<Instruction>, args: Vec<A>) -> Instruction
+    where
+        A: Into<Word>,
+    {
+        Instruction::Call(instructions, args.into_iter().map(Into::into).collect())
+    }
+
+    pub fn circle(word: impl Into<Word>) -> Instruction {
+        Instruction::Circle(word.into())
+    }
+
+    pub fn copy(word: impl Into<Word>) -> Instruction {
+        Instruction::Copy(word.into())
+    }
+
+    pub fn copy_trimmed(word: impl Into<Word>) -> Instruction {
+        Instruction::TrimmedCopy(word.into())
+    }
+
+    pub fn jump(rel_jump: i64) -> Instruction {
+        Instruction::Jump(rel_jump)
+    }
+
+    pub fn jump_rel_if(
+        word: impl Into<Word>,
+        ordering: Ordering,
+        val: f64,
+        rel_jump: i64,
+    ) -> Instruction {
+        Instruction::JumpRelIf(word.into(), ordering, val, rel_jump)
+    }
+
+    pub fn add(a: impl Into<Word>, b: impl Into<Word>) -> Instruction {
+        Instruction::Add(a.into(), b.into())
+    }
+
+    pub fn sub(a: impl Into<Word>, b: impl Into<Word>) -> Instruction {
+        Instruction::Sub(a.into(), b.into())
+    }
+
+    pub fn modulo(a: impl Into<Word>, b: impl Into<Word>) -> Instruction {
+        Instruction::Mod(a.into(), b.into())
+    }
+
+    pub fn stop() -> Instruction {
+        Instruction::STOP
     }
 }
