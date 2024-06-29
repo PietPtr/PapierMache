@@ -12,7 +12,7 @@ use std::{fs, io};
 
 #[tokio::main]
 async fn main() -> AppResult<()> {
-    let program = call_static(gcd_with_mod(), vec![1322., 127.], CHARS_PER_FLOAT);
+    let program = call_static(gcd_with_mod(), vec![105., 20.], CHARS_PER_FLOAT);
 
     let mut app = App::new(program);
 

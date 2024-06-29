@@ -21,17 +21,24 @@ pub type AppResult<T> = std::result::Result<T, Box<dyn error::Error>>;
 
 pub struct App {
     pub running: bool,
-    current_instruction: Instruction,
+    last_sim_step: SimStepState,
     vm: PaperVM<CharCell>,
+    view_pos: Pos,
 }
 
 impl App {
     /// Constructs a new instance of [`App`].
     pub fn new(program: Vec<Instruction>) -> Self {
+        let mut vm = PaperVM::<CharCell>::new(program);
+        let last_sim_step = vm.step();
         Self {
             running: true,
-            current_instruction: program.first().unwrap().clone(),
-            vm: PaperVM::<CharCell>::new(program),
+            last_sim_step: match last_sim_step {
+                StepResult::Finished => todo!(),
+                StepResult::Running(s) => s,
+            },
+            vm,
+            view_pos: Pos(0, 0),
         }
     }
 
@@ -52,22 +59,64 @@ impl App {
     pub fn advance_sim(&mut self) {
         match self.vm.step() {
             StepResult::Finished => (),
-            StepResult::Running(instr) => self.current_instruction = instr,
+            StepResult::Running(step_state) => self.last_sim_step = step_state,
         }
     }
 
     pub fn resize(&mut self, width: u16, height: u16) {}
 
     pub fn scroll(&mut self, key: KeyCode) {
-        // TODO: d-pad scrolling
-    }
-
-    pub fn set_scroll_params(&mut self, length: usize) {
-        // self.vertical_scroll_state = self.vertical_scroll_state.content_length(length);
-        // self.page_content_length = length;
+        match key {
+            KeyCode::Left => self.view_pos.0 -= 1,
+            KeyCode::Right => self.view_pos.0 += 1,
+            KeyCode::Up => self.view_pos.1 -= 1,
+            KeyCode::Down => self.view_pos.1 += 1,
+            _ => {}
+        }
     }
 
     pub fn current_instruction(&self) -> Instruction {
-        self.current_instruction.clone()
+        self.last_sim_step.instruction.clone()
+    }
+
+    pub fn get_view_as_string(&self, size: Rect) -> String {
+        let memory = self.vm.lowest_subroutine().get_memory();
+
+        let mut result = String::new();
+        for y in self.view_pos.1..(self.view_pos.1 + size.height as i64) {
+            for x in self.view_pos.0..(self.view_pos.0 + size.width as i64) {
+                let ch = memory
+                    .get(&Pos(x, y))
+                    .map(|c| c.read().to_string())
+                    .unwrap_or(" ".to_string());
+                result.push_str(&ch);
+            }
+            result.push('\n');
+        }
+        result
+    }
+
+    fn apply_view(&self, pos: Pos) -> Pos {
+        Pos(pos.0 - self.view_pos.0, pos.1 - self.view_pos.1 + 1)
+    }
+
+    pub fn last_cursor(&self) -> Pos {
+        self.apply_view(self.last_sim_step.cursor)
+    }
+    pub fn cursor(&self) -> Pos {
+        self.apply_view(self.vm.lowest_subroutine().cursor())
+        // self.apply_view(self.last_sim_step.cursor)
+    }
+
+    pub fn highlight_words(&self) -> Vec<Word> {
+        match self.current_instruction() {
+            Instruction::Circle(word) => vec![word],
+            Instruction::Add(w1, w2) => vec![w1, w2],
+            Instruction::Sub(w1, w2) => vec![w1, w2],
+            Instruction::Mod(w1, w2) => vec![w1, w2],
+            Instruction::Copy(word) => vec![word],
+            Instruction::TrimmedCopy(word) => vec![word],
+            _ => vec![],
+        }
     }
 }

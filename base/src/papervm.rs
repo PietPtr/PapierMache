@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::{self, Display};
+use std::hash::Hash;
 use std::sync::Arc;
 
 pub const CHARS_PER_FLOAT: usize = 10;
@@ -193,9 +194,15 @@ where
 }
 
 #[derive(Debug)]
+pub struct SimStepState {
+    pub instruction: Instruction,
+    pub cursor: Pos,
+}
+
+#[derive(Debug)]
 pub enum StepResult {
     Finished,
-    Running(Instruction),
+    Running(SimStepState),
 }
 
 impl StepResult {
@@ -211,7 +218,7 @@ pub struct PaperVM<T: MemoryCell> {
     program: Vec<Instruction>,
     circled: Option<Word>,
     instruction_counter: i64,
-    subroutine: Option<Box<PaperVM<T>>>,
+    pub subroutine: Option<Box<PaperVM<T>>>,
     pub finished_papers: Vec<PaperVM<T>>,
 }
 
@@ -230,6 +237,14 @@ impl<T: MemoryCell> PaperVM<T> {
 
     pub fn get_memory(&self) -> &HashMap<Pos, T> {
         &self.memory
+    }
+
+    pub fn lowest_subroutine(&self) -> &PaperVM<T> {
+        if let Some(vm) = &self.subroutine {
+            vm.lowest_subroutine()
+        } else {
+            self
+        }
     }
 
     pub fn get_circled(&self) -> Option<Word> {
@@ -252,7 +267,7 @@ impl<T: MemoryCell> PaperVM<T> {
         self.write(&result);
     }
 
-    fn aread(&self, x: i64, y: i64) -> String {
+    pub fn aread(&self, x: i64, y: i64) -> String {
         self.memory
             .get(&Pos(x, y))
             .map(|c| c.read().to_string())
@@ -295,6 +310,11 @@ impl<T: MemoryCell> PaperVM<T> {
 
         let instruction = self.program[self.instruction_counter as usize].clone();
 
+        let sim_step_state = SimStepState {
+            instruction: instruction.clone(),
+            cursor: self.cursor,
+        };
+
         match instruction.clone() {
             Instruction::Write(chars) => self.write(&chars),
             Instruction::Call(instructions, args) => {
@@ -304,7 +324,7 @@ impl<T: MemoryCell> PaperVM<T> {
                 }
                 self.subroutine = Some(Box::new(vm));
                 self.instruction_counter += 1;
-                return StepResult::Running(instruction.clone());
+                return StepResult::Running(sim_step_state);
             }
             Instruction::Circle(arg) => {
                 self.circled = Some(arg);
@@ -322,7 +342,7 @@ impl<T: MemoryCell> PaperVM<T> {
             }
             Instruction::Jump(rel_jump) => {
                 self.instruction_counter += rel_jump;
-                return StepResult::Running(instruction.clone());
+                return StepResult::Running(sim_step_state);
             }
             Instruction::JumpRelIf(a, ordering, val, rel_jump) => {
                 let a: f64 = self.read(a);
@@ -332,14 +352,14 @@ impl<T: MemoryCell> PaperVM<T> {
                         || (ordering == Ordering::Equal && (a - val).abs() < f32::EPSILON as f64)
                 {
                     self.instruction_counter += rel_jump;
-                    return StepResult::Running(instruction.clone());
+                    return StepResult::Running(sim_step_state);
                 }
             }
             Instruction::STOP => panic!("STOP"),
         }
         self.instruction_counter += 1;
 
-        StepResult::Running(instruction.clone())
+        StepResult::Running(sim_step_state)
     }
 
     pub fn run(&mut self) {

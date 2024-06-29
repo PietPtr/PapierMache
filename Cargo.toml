@@ -1,6 +1,5 @@
 [workspace]
 members = [
     "base",
-    "render_daan", 
     "render_staal",
 ]
